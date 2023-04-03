@@ -7,6 +7,7 @@ import androidx.compose.material.icons.filled.Info
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.input.TextFieldValue
@@ -14,14 +15,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
-import java.net.URI
-import java.net.URISyntaxException
-import java.net.http.HttpClient
-import java.net.http.HttpRequest
-import java.net.http.HttpRequest.BodyPublishers
-import java.net.http.HttpResponse
-import java.net.http.HttpResponse.BodyHandlers
-import java.util.concurrent.CompletableFuture
+import io.ktor.client.*
+import io.ktor.client.request.*
+import io.ktor.client.statement.*
+import io.ktor.http.*
+import kotlinx.coroutines.launch
 
 @Composable
 fun app() {
@@ -37,7 +35,7 @@ fun app() {
 
     val sentMessageErrorState = remember { mutableStateOf("") }
 
-    val client = HttpClient.newHttpClient()
+    val coroutineScope = rememberCoroutineScope()
 
     MaterialTheme {
         Column(Modifier.fillMaxSize(), Arrangement.spacedBy(5.dp)) {
@@ -122,32 +120,32 @@ fun app() {
                     }
                     if (webhookUrlErrorState.value.isBlank() && missingMessageState.value.isBlank()) {
                         sentState.value = "Sending..."
-                        try {
-                            sendWebhookMessage(client, webhookUrlState.value.text, messageState.value.text, usernameState.value.text, avatarUrlState.value.text).thenAccept { response ->
-                                run {
-                                    val responseCode = response.statusCode()
-                                    sentMessageErrorState.value = when {
-                                        responseCode >= 500 -> "Error with Discord"
-                                        responseCode >= 400 -> "Error with one or more fields"
-                                        responseCode in 200..299 -> ""
-                                        else -> "Error sending message"
-                                    }
-
-                                    if (responseCode in 200 .. 299) {
-                                        sentState.value = "Sent"
-                                        messageState.value = TextFieldValue("")
-                                    } else {
-                                        sentState.value = "Error"
-                                    }
+                        coroutineScope.launch {
+                            try {
+                                val response = sendWebhookMessage(
+                                    webhookUrlState.value.text,
+                                    messageState.value.text,
+                                    usernameState.value.text,
+                                    avatarUrlState.value.text
+                                )
+                                val responseCode = response.status.value
+                                sentMessageErrorState.value = when {
+                                    responseCode >= 500 -> "Error with Discord"
+                                    responseCode >= 400 -> "Error with one or more fields"
+                                    responseCode in 200..299 -> ""
+                                    else -> "Error sending message"
                                 }
+
+                                if (responseCode in 200..299) {
+                                    sentState.value = "Sent"
+                                    messageState.value = TextFieldValue("")
+                                } else {
+                                    sentState.value = "Error"
+                                }
+                            } catch (e: Exception) {
+                                sentMessageErrorState.value = "Error sending message"
+                                sentState.value = "Error"
                             }
-                        } catch (e: Exception) {
-                            if (e is IllegalArgumentException || e is URISyntaxException) {
-                                webhookUrlErrorState.value = "Invalid webhook URL"
-                            } else {
-                                sentMessageErrorState.value = "Could not send message"
-                            }
-                            sentState.value = "Error"
                         }
                     } else {
                         sentState.value = "Error"
@@ -170,7 +168,12 @@ fun app() {
     }
 }
 
-fun sendWebhookMessage(client: HttpClient, webhookUrl: String, message: String, username: String = "", avatarUrl: String = ""): CompletableFuture<HttpResponse<String>> {
+suspend fun sendWebhookMessage(
+    webhookUrl: String,
+    message: String,
+    username: String = "",
+    avatarUrl: String = ""
+): HttpResponse {
     var body = "{" +
             "\"content\":\"${message}\""
     if (username.isNotBlank()) {
@@ -180,12 +183,11 @@ fun sendWebhookMessage(client: HttpClient, webhookUrl: String, message: String, 
         body += ",\"avatar_url\":\"${avatarUrl}\""
     }
     body += "}"
-    val request = HttpRequest.newBuilder()
-        .uri(URI(webhookUrl))
-        .header("Content-Type", "application/json")
-        .POST(BodyPublishers.ofString(body))
-        .build()
-    return client.sendAsync(request, BodyHandlers.ofString())
+    val client = HttpClient()
+    return client.post(webhookUrl) {
+        contentType(ContentType.Application.Json)
+        setBody(body)
+    }
 }
 
 fun main() = application {

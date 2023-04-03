@@ -24,6 +24,13 @@ kotlin {
         withJava()
     }
     sourceSets {
+        val ktorVersion = project.property("ktor.version") as String
+        val commonMain by getting {
+            dependencies {
+                implementation("io.ktor:ktor-client-core:$ktorVersion")
+                implementation("io.ktor:ktor-client-cio:$ktorVersion")
+            }
+        }
         val jvmMain by getting {
             dependencies {
                 implementation(compose.desktop.currentOs)
